@@ -794,7 +794,7 @@ def main(args):
     rog_calculator = GenericMetric(module="protflow.utils.metrics", function="calc_rog_of_pdb", jobstarter=small_cpu_jobstarter)
     tm_score_calculator = protflow.metrics.tmscore.TMalign(jobstarter = small_cpu_jobstarter)
     ligand_mpnn = protflow.tools.ligandmpnn.LigandMPNN(jobstarter = cpu_jobstarter)
-    rosetta = protflow.tools.rosetta.Rosetta(jobstarter=cpu_jobstarter, fail_on_missing_output_poses=True)
+    rosetta = protflow.tools.rosetta.Rosetta(jobstarter=cpu_jobstarter, fail_on_missing_output_poses=False)
     esmfold = protflow.tools.esmfold.ESMFold(jobstarter=real_gpu_jobstarter) # esmfold does not work on cpu
     ligand_rmsd = MotifSeparateSuperpositionRMSD(
         ref_col="updated_reference_frags_location",
