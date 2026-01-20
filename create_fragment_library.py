@@ -17,6 +17,8 @@ import Bio
 import Bio.PDB
 from Bio.PDB import Structure, Model, Chain, Residue, Atom
 import matplotlib.pyplot as plt
+# ffi wrapper for Rust-powered validation
+from ffi_wrapper import run_validator_to_file, score_files
 
 # protflow
 from protflow.utils.biopython_tools import load_structure_from_pdbfile, save_structure_to_pdbfile
@@ -1346,7 +1348,15 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
     def write_clash_detection_cmd(pose1, pose2, bb_multiplier, sc_multiplier, script_path, directory, prefix):
         cmd = f"{os.path.join(PROTFLOW_ENV, 'python')} {script_path} --pose1 {pose1} --pose2 {pose2} --working_dir {directory} --bb_multiplier {bb_multiplier} --sc_multiplier {sc_multiplier} --output_prefix {prefix}"
         return cmd
-
+    def generate_valid_combinations_parallel(n_sets, compat_maps, set_lengths):
+        compat_entries = []
+        for i in range(len(set_lengths)):
+            for j in range(i+1, len(set_lengths)):
+                for idx1, submap in compat_maps[i][j].items():
+                    for idx2 in submap:
+                        compat_entries.append((i, j, idx1, idx2))
+        valid_combo_path = run_validator_to_file(set_lengths, compat_entries)
+        return valid_combo_path
     def generate_valid_combinations(n_sets, compat_maps, set_lengths):
         valid_combos = []
 
@@ -1433,19 +1443,24 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
     log_and_print("If number of sidechain clashes is high, this is often a result of missing covalent bonds. Otherwise, <frag_frag_sc_clash_vdw_multiplier> can be reduced.")
 
     log_and_print("Generating valid combinations...")
-    valid_combos = generate_valid_combinations(n_sets, compat_maps, set_lengths)
+    valid_combo_path = generate_valid_combinations_parallel(n_sets, compat_maps, set_lengths)
 
-    if len(valid_combos) < 1:
-        logging.error("No valid non-clashing combinations found. Adjust parameters like Van-der-Waals multiplier or pick different fragments!")
-
-    log_and_print(f"Found {len(valid_combos)} valid combinations.")
-
-    valid_combos_arr = np.array(valid_combos)  # shape (num_ensembles, n_sets)
+    with open(valid_combo_path+".meta") as f:
+        d = json.load(f)
+        if d["rows"] < 1:
+            logging.error("No valid non-clashing combinations found. Adjust parameters like Van-der-Waals multiplier or pick different fragments!")
+        total_len = d["rows"]
+        log_and_print(f"Found {total_len} valid combinations.")
+    
+    # Create rotamer csv paths
+    valid_combos = score_files(valid_combo_path, in_files, d["rows"], d["cols"], 1000)
+    valid_combos_len = valid_combos.len()
+    log_and_print(f"Scored {valid_combos_len} valid combinations")
 
     log_and_print("Extracting data for each pose...")
     flattened_dfs = []
     for i in range(n_sets):
-        indices = valid_combos_arr[:, i].flatten()  # indices from set i
+        indices = valid_combos[:, i].flatten()  # indices from set i
         df = in_dfs[i].iloc[indices]
         flattened_dfs.append(df)
 
