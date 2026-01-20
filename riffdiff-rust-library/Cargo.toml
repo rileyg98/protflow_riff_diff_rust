@@ -1,5 +1,5 @@
 [package]
-name = "riffdiff_frag_valid_combination"
+name = "riffdiff-rust-library"
 version = "0.1.0"
 edition = "2024"
 [lib]
@@ -10,5 +10,7 @@ bytemuck = "1.24.0"
 csv = "1.4.0"
 libc = "0.2.180"
 memmap2 = "0.9.9"
+numpy = "0.27.1"
+pyo3 = {version = "0.27.2", features = ["extension-module"]}
 rayon = "1.11.0"
 serde_json = "1.0.149"
