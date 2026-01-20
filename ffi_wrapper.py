@@ -67,7 +67,9 @@ def run_validator_to_file(set_lengths, compat_entries):
 def score_files(combo_path, rotamer_paths, n_combos, n_sets, top_n):
     c_paths = [ffi.new("char[]", path.encode("utf-8")) for path in rotamer_paths]
     c_score_files = ffi.new("const char*[]", c_paths)
-    result_ptr = lib.find_top_combos_ffi(combo_path, c_score_files, len(rotamer_paths), n_combos, n_sets, top_n)
+    combo_path_bytes = output_path.encode("utf-8")
+    combo_path_c = ffi.new("char[]", combo_path_bytes)
+    result_ptr = lib.find_top_combos_ffi(combo_path_c, c_score_files, len(rotamer_paths), n_combos, n_sets, top_n)
     n = res.num_combos
     k = res.n_sets
     flat = ffi.buffer(res.combos_ptr, n * k * 2)
