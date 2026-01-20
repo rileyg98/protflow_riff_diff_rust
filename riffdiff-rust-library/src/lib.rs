@@ -5,7 +5,10 @@ use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use pyo3::prelude::*;
+use numpy::{PyArray2, PyArrayMethods, ToPyArray};
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CompatEntry {
@@ -15,97 +18,61 @@ pub struct CompatEntry {
     pub idx2: u32,
 }
 
-
-
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
-use std::ptr;
-
-#[unsafe(no_mangle)]
-pub extern "C" fn find_top_combos_ffi(
-    combo_file: *const c_char,
-    score_files: *const *const c_char,
-    n_score_files: usize,
+#[pyfunction]
+fn find_top_combos(
+    py: Python,
+    combo_file: String,
+    score_files: Vec<String>,
     n_combos: usize,
     n_sets: usize,
     top_n: usize,
-) -> *mut FfiComboResult {
-    // Safety: unwrap all C strings
-    let combo_path = unsafe {
-        assert!(!combo_file.is_null());
-        CStr::from_ptr(combo_file).to_string_lossy().into_owned()
-    };
-
-    let mut score_paths = Vec::new();
-    for i in 0..n_score_files {
-        let ptr = unsafe { *score_files.add(i) };
-        if ptr.is_null() {
-            return ptr::null_mut();
-        }
-        let path = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        score_paths.push(std::path::PathBuf::from(path));
-    }
+) -> PyResult<Py<PyArray2<u16>>> {
+    let combo_path = Path::new(&combo_file);
+    let score_paths: Vec<PathBuf> = score_files.into_iter().map(PathBuf::from).collect();
 
     // Load combo data
-    let combo_data = match load_u16_mmap(std::path::Path::new(&combo_path)) {
-        Ok(data) => data,
-        Err(_) => return ptr::null_mut(),
-    };
-
+    let combo_data =
+        load_u16_mmap(combo_path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
     let combos = ValidComboMatrix {
         n_combos,
         n_sets,
         data: combo_data,
     };
 
+    // Load scores
     let mut scores = Vec::new();
     for path in &score_paths {
         match load_f32_score_array_from_csv(path) {
             Ok(s) => scores.push(s),
-            Err(_) => return ptr::null_mut(),
+            Err(e) => return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())),
         }
     }
-
     let score_set = RotamerScoreSet { scores };
 
+    // Score and find the best
     let best = score_combinations(&combos, &score_set, top_n);
 
     // Flatten combo data into u16 array
-    let mut flat_result: Vec<u16> = Vec::with_capacity(top_n * n_sets);
-    for ScoredCombo { index, .. } in best {
-        let row = combos.get_combo(index);
+    let mut flat_result: Vec<u16> = Vec::with_capacity(best.len() * n_sets);
+    for ScoredCombo { index, .. } in &best {
+        let row = combos.get_combo(*index);
         flat_result.extend_from_slice(row);
     }
 
-    // Box it up for C return
-    let result = Box::new(FfiComboResult {
-        combos_ptr: flat_result.as_mut_ptr(),
-        num_combos: top_n,
-        n_sets,
-    });
-
-    // Leak the vector to keep it alive
-    std::mem::forget(flat_result);
-
-    Box::into_raw(result)
+    // Create a NumPy array and reshape it
+    let array = flat_result
+        .to_pyarray(py)
+        .reshape([best.len(), n_sets])
+        .map_err(|e: pyo3::PyErr| e)?;
+    Ok(array.to_owned().into())
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn free_combo_result(ptr: *mut FfiComboResult) {
-    if ptr.is_null() {
-        return;
-    }
-
-    unsafe {
-        let boxed = Box::from_raw(ptr);
-        let _ = Vec::from_raw_parts(
-            boxed.combos_ptr,
-            boxed.num_combos * boxed.n_sets,
-            boxed.num_combos * boxed.n_sets,
-        );
-        // Drops boxed, deallocating struct
-    }
+#[pymodule]
+fn riffdiff_rust_library(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(find_top_combos, m)?)?;
+    Ok(())
 }
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn generate_valid_combinations_to_file(
@@ -242,32 +209,6 @@ pub extern "C" fn generate_valid_combinations(
     });
 }
 
-/*pub extern "C" fn generate_valid_combinations(
-    compat_ptr: *const CompatEntry,
-    compat_len: usize,
-    set_lengths_ptr: *const u32,
-    set_lengths_len: usize,
-    output_callback: extern "C" fn(*const u32, usize),
-) {
-    let compat_slice = unsafe {std::slice::from_raw_parts(compat_ptr, compat_len) };
-    let set_lengths = unsafe { std::slice::from_raw_parts(set_lengths_ptr, set_lengths_len) };
-    let n_sets = set_lengths.len();
-    let mut compat_map = vec![vec![vec![vec![false; 0]; 0]; n_sets]; n_sets];
-    let max_set_size = *set_lengths.iter().max().unwrap_or(&0) as usize;
-    for i in 0..n_sets {
-        for j in 0..n_sets {
-            compat_map[i][j] = vec![vec![false; max_set_size]; max_set_size];
-        }
-    }
-    for entry in compat_slice {
-        let (i, j, a, b) = (entry.set1 as usize, entry.set2 as usize, entry.idx1 as usize, entry.idx2 as usize);
-        compat_map[i][j][a][b] = true;
-        compat_map[j][i][b][a] = true; // Symmetric
-    }
-    let mut current_combo = Vec::with_capacity(n_sets);
-    backtrack(0, n_sets, set_lengths, &compat_map, &mut current_combo, output_callback);
-}*/
-
 fn backtrack(depth: usize, n_sets: usize, set_lengths: &[u32], compat_map: &Vec<Vec<Vec<Vec<bool>>>>, current_combo: &mut Vec<u32>, output_callback: extern "C" fn(*const u32, usize)) {
     if depth == n_sets {
         output_callback(current_combo.as_ptr(), current_combo.len());
@@ -374,24 +315,28 @@ fn score_combinations(
     scores: &RotamerScoreSet,
     top_n: usize,
 ) -> Vec<ScoredCombo> {
-    let mut heap = BinaryHeap::with_capacity(top_n);
+    let heap = Mutex::new(BinaryHeap::with_capacity(top_n + 1));
 
-    for (i, combo_indices) in (0..combos.n_combos).map(|i| combos.get_combo(i)).enumerate() {
-        let score_sum: f32 = combo_indices.iter().enumerate()
+    (0..combos.n_combos).into_par_iter().for_each(|i| {
+        let combo_indices = combos.get_combo(i);
+        let score_sum: f32 = combo_indices
+            .iter()
+            .enumerate()
             .map(|(residue_i, &rotamer_index)| scores.scores[residue_i][rotamer_index as usize])
             .sum();
 
         let avg_score = score_sum / combos.n_sets as f32;
-
-        if heap.len() < top_n {
-            heap.push(ScoredCombo { score: avg_score, index: i });
-        } else if avg_score > heap.peek().unwrap().score {
-            heap.pop();
-            heap.push(ScoredCombo { score: avg_score, index: i });
+        
+        let mut heap_guard = heap.lock().unwrap();
+        if heap_guard.len() < top_n {
+            heap_guard.push(ScoredCombo { score: avg_score, index: i });
+        } else if avg_score > heap_guard.peek().unwrap().score {
+            heap_guard.pop();
+            heap_guard.push(ScoredCombo { score: avg_score, index: i });
         }
-    }
+    });
 
-    heap.into_sorted_vec() // Return sorted high-to-low
+    heap.into_inner().unwrap().into_sorted_vec()
 }
 
 fn load_u16_mmap(path: &Path) -> anyhow::Result<Arc<[u16]>> {
@@ -401,24 +346,8 @@ fn load_u16_mmap(path: &Path) -> anyhow::Result<Arc<[u16]>> {
     Ok(Arc::from(data))
 }
 
-
-#[repr(C)]
-pub struct FfiComboResult {
-    // Pointer to flat list of all top combos (u16 indices)
-    pub combos_ptr: *mut u16,
-    // Number of combinations - length / n_sets
-    pub num_combos: usize,
-    // Number of sets per combo (residues)
-    pub n_sets: usize
-}
-
-
-
 use std::io::{BufReader};
 use anyhow::Result;
-
-
-
 use csv::ReaderBuilder;
 
 pub fn load_f32_score_array_from_csv(path: &Path) -> Result<Arc<[f32]>> {
