@@ -7,7 +7,7 @@ use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 use pyo3::prelude::*;
-use numpy::{PyArray2, PyArrayMethods, ToPyArray};
+use numpy::{PyArray2, PyArrayMethods, ToPyArray, PyReadonlyArray1, PyReadonlyArray2};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -67,73 +67,57 @@ fn find_top_combos(
     Ok(array.to_owned().into())
 }
 
-#[pymodule]
-fn riffdiff_rust_library(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(find_top_combos, m)?)?;
-    Ok(())
-}
+#[pyfunction]
+fn generate_valid_combinations_to_file(
+    compat_data: PyReadonlyArray2<u32>,
+    set_lengths: PyReadonlyArray1<u32>,
+    output_path: String,
+) -> PyResult<()> {
+    let compat_slice = compat_data.as_slice().map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let set_lengths_slice = set_lengths.as_slice().map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-
-#[unsafe(no_mangle)]
-pub extern "C" fn generate_valid_combinations_to_file(
-    compat_ptr: *const CompatEntry,
-    compat_len: usize,
-    set_lengths_ptr: *const u32,
-    set_lengths_len: usize,
-    output_path_ptr: *const libc::c_char,
-) {
-    let compat_slice = unsafe { std::slice::from_raw_parts(compat_ptr, compat_len) };
-    let set_lengths = unsafe { std::slice::from_raw_parts(set_lengths_ptr, set_lengths_len) };
-    let output_path = unsafe { std::ffi::CStr::from_ptr(output_path_ptr).to_str().unwrap() };
-
-    let n_sets = set_lengths.len();
-    let max_set_size = *set_lengths.iter().max().unwrap_or(&0) as usize;
+    let n_sets = set_lengths_slice.len();
+    let max_set_size = *set_lengths_slice.iter().max().unwrap_or(&0) as usize;
 
     let mut compat_map = vec![vec![vec![vec![false; max_set_size]; max_set_size]; n_sets]; n_sets];
-    for i in 0..n_sets {
-        for j in 0..n_sets {
-            compat_map[i][j] = vec![vec![false; max_set_size]; max_set_size];
-        }
-    }
-
-    for entry in compat_slice {
-        let (i, j, a, b) = (
-            entry.set1 as usize,
-            entry.set2 as usize,
-            entry.idx1 as usize,
-            entry.idx2 as usize,
-        );
+    for row in compat_slice.chunks_exact(4) {
+        let (i, j, a, b) = (row[0] as usize, row[1] as usize, row[2] as usize, row[3] as usize);
         compat_map[i][j][a][b] = true;
         compat_map[j][i][b][a] = true;
     }
 
-
-    let writer = Arc::new(Mutex::new(BinWriter::new(output_path).expect("Unable to create BinWriter")));
+    let writer = Arc::new(Mutex::new(
+        BinWriter::new(&output_path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?,
+    ));
 
     let compat_map = Arc::new(compat_map);
-    let set_lengths = Arc::new(set_lengths.to_vec());
+    let set_lengths_arc = Arc::new(set_lengths_slice.to_vec());
 
-    // Top-level parallelism: depth = 0
-    (0..set_lengths[0]).into_par_iter().for_each(|first_idx| {
+    (0..set_lengths_slice[0]).into_par_iter().for_each(|first_idx| {
         let mut combo = vec![first_idx];
-        recurse_write(
-            1,
-            &set_lengths,
-            &compat_map,
-            &mut combo,
-            &writer,
-        );
+        recurse_write(1, &set_lengths_arc, &compat_map, &mut combo, &writer);
     });
-    writer.lock().unwrap()
-        .close_with_metadata(format!("{}.meta", output_path), n_sets)
-        .expect("Unable to write metadata");
 
+    writer
+        .lock()
+        .unwrap()
+        .close_with_metadata(format!("{}.meta", output_path), n_sets)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+
+    Ok(())
+}
+
+#[pymodule]
+fn riffdiff_rust_library(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(find_top_combos, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_valid_combinations_to_file, m)?)?;
+    Ok(())
 }
 
 fn recurse_write(
     depth: usize,
-    set_lengths: &[u32],
-    compat_map: &Vec<Vec<Vec<Vec<bool>>>>,
+    set_lengths: &Arc<Vec<u32>>,
+    compat_map: &Arc<Vec<Vec<Vec<Vec<bool>>>>>,
     current_combo: &mut Vec<u32>,
     writer: &Arc<Mutex<BinWriter>>,
 ) {
@@ -157,77 +141,6 @@ fn recurse_write(
         if is_valid {
             current_combo.push(idx);
             recurse_write(depth + 1, set_lengths, compat_map, current_combo, writer);
-            current_combo.pop();
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn generate_valid_combinations(
-    compat_ptr: *const CompatEntry,
-    compat_len: usize,
-    set_lengths_ptr: *const u32,
-    set_lengths_len: usize,
-    output_callback: extern "C" fn(*const u32, usize),
-) {
-    let compat_slice = unsafe { std::slice::from_raw_parts(compat_ptr, compat_len) };
-    let set_lengths = unsafe { std::slice::from_raw_parts(set_lengths_ptr, set_lengths_len) };
-    let n_sets = set_lengths.len();
-
-    // Build compatibility map
-    let mut compat_map = vec![vec![vec![vec![false; 0]; 0]; n_sets]; n_sets];
-    let max_set_size = *set_lengths.iter().max().unwrap_or(&0) as usize;
-    for i in 0..n_sets {
-        for j in 0..n_sets {
-            compat_map[i][j] = vec![vec![false; max_set_size]; max_set_size];
-        }
-    }
-    for entry in compat_slice {
-        let (i, j, a, b) = (
-            entry.set1 as usize,
-            entry.set2 as usize,
-            entry.idx1 as usize,
-            entry.idx2 as usize,
-        );
-        compat_map[i][j][a][b] = true;
-        compat_map[j][i][b][a] = true; // Symmetric
-    }
-
-    // Parallelize the first level of recursion
-    let first_set_size = set_lengths[0] as usize;
-
-    (0..first_set_size).into_par_iter().for_each(|idx| {
-        let mut combo = vec![idx as u32];
-        backtrack(
-            1,
-            n_sets,
-            set_lengths,
-            &compat_map,
-            &mut combo,
-            output_callback,
-        );
-    });
-}
-
-fn backtrack(depth: usize, n_sets: usize, set_lengths: &[u32], compat_map: &Vec<Vec<Vec<Vec<bool>>>>, current_combo: &mut Vec<u32>, output_callback: extern "C" fn(*const u32, usize)) {
-    if depth == n_sets {
-        output_callback(current_combo.as_ptr(), current_combo.len());
-        
-        return;
-    }
-    for idx in 0..set_lengths[depth] {
-        let mut valid = true;
-        for prev_set in 0..depth {
-            let prev_idx = current_combo[prev_set] as usize;
-            let cur_idx = idx as usize;
-            if !compat_map[prev_set][depth][prev_idx][cur_idx] {
-                valid = false;
-                break;
-            }
-        }
-        if valid {
-            current_combo.push(idx);
-            backtrack(depth + 1, n_sets, set_lengths, compat_map, current_combo, output_callback);
             current_combo.pop();
         }
     }
