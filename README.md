@@ -1,5 +1,5 @@
-# riff_diff_protflow
-ProtFlow Implementation of the RiffDiff pipeline to design enzymes from theozymes.
+# riff_diff_protflow_rust
+ProtFlow Implementation of the RiffDiff pipeline to design enzymes from theozymes. Uses Rust native code to parallelise processing and reduce RAM footprint.
 
 # INSTALLATION
 
@@ -19,17 +19,17 @@ All Riff-Diff scripts should be started within an active ProtFlow conda environm
 Clone this repository:
 
 ```
-git clone https://github.com/mabr3112/riff_diff_protflow.git
+git clone https://github.com/rileyg98/protflow_riff_diff_rust.git
 ```
 
 Replace the potentials.py in your RFdiffusion installation folder with the potentials.py in the database directory to gain access to the custom pocket potential. Alternatively, you can just copy the relevant class (custom_recenter_ROG) into the RFdiffusion potentials.py script (do not forget to add the potentials to the dictionary of implemented potentials in the end of the script!).
 
 ```
-cd riff_diff_protflow
+cd protflow_riff_diff_rust
 cp database/potentials.py /path/to/RFdiffusion/rfdiffusion/potentials/potentials.py
 ```
 
-If you want to experiment with the fragment picking pipeline, you need to download the fragment database from https://zenodo.org/records/15482348 and save it at /riff_diff_protflow/database/fraglib_noscore.pkl.
+If you want to experiment with the fragment picking pipeline, you need to download the fragment database from https://zenodo.org/records/15482348 and save it at /protflow_riff_diff_rust/database/fraglib_noscore.pkl.
 
 
 # MANUAL
@@ -38,6 +38,15 @@ The riff-diff pipeline is divided into 2 major scripts:
   1) generation of fragments for a provided theozyme to create a motif library (create_fragment_library.py)
   2) generation of structures and refinement (structure_generation.py)
 This manual will walk you through each of these steps to create proficient de novo enzymes or small molecule binders.
+
+# RUNNING LOCALLY
+
+A SLURM cluster is not required to run this project. Adjustment of the input json file is all that is required, set jobstarter to "Local". 
+
+
+# RUST LIBRARY
+
+This fork of riff-diff uses a Rust library to execute CPU and RAM-intensive processing steps in parallel, and to optimise RAM usage significantly.
 
 # MOTIF LIBRARY CREATION
 
@@ -50,6 +59,7 @@ An example command to run create_fragment_library.py can be found in the example
 cd examples
 sbatch motif_library_generation.sh
 ```
+
 
 By default, the backbone fragment consists of a 7-residue idealized helical fragment, but this can be replaced by custom fragments if desired using the --fragment_pdb flag. The mandatory inputs are:
   - --riff_diff_dir: required to find paths to database etc
@@ -113,6 +123,8 @@ The output is in the folder evaluation_results and can be viewed via algin_resul
 
 ## Stage 4: Diversification
 This is an optional stage. It is used to diversify sequences for successful backbones and to fine-tune active sites. You can manually provide a list of mutations you want to introduce for each input structure (for instance, to open channels that are blocked by a sidechain). This can be done using the mutations_blank.csv in the evaluation_results folder. In the column omit_AAs, residue positions that should not have the selected amino acid can be provided. In the column allow_AAs, all allowed amino acids at the specified positions can be provided. e.g.: A37:R;A118:YWF in the omit_AAs column will prevent an arginine residue at position 37 and a tyrosine, tryptophane or phenylalanine at position 118. A12:AGST in the column allow_AAs will only allow an alanine, glycine, serine or threonine at position 12. By default, LigandMPNN is used to create diversified sequences. As an alternative, coupled moves can be employed (using the flag --variants_run_cm). The output of variants generation run can be found in the variants_results folder.
+
+
 
 
 # DISCLAIMER
