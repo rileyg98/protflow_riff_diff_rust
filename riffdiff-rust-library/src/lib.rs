@@ -148,7 +148,7 @@ fn recurse_write(
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const BUFFER_CAPACITY: usize = 4096; // Number of u16 values to buffer before writing
+const BUFFER_CAPACITY: usize = 40960; // Number of u16 values to buffer before writing
 
 pub struct BinWriter {
     writer: Arc<Mutex<BufWriter<File>>>,
