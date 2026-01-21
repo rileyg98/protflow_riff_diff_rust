@@ -43,11 +43,22 @@ def score_files(combo_path, rotamer_paths, n_combos, n_sets, top_n):
         np.ndarray: A NumPy array of shape (top_n, n_sets) containing the indices
                     of the best rotamer combinations.
     """
-    # The new function takes simple types and returns a NumPy array directly.
-    # No more CFFI pointers, buffers, or manual memory management.
+    # rotamer_paths is actually 
+    # Transform rotamer_paths to fragment_info paths
+    fragment_info_paths = []
+    for path in rotamer_paths:
+        # Extract rotamer_id from the clash_check path format
+        # e.g., 'outputs/motif_library_assembly/clash_check/{rotamer_id}_rechained.json'
+        filename = path.split('/')[-1]  # Get '{rotamer_id}_rechained.json'
+        rotamer_id = filename.replace('_rechained.json', '') # Get '{rotamer_id}'
+        
+        # Construct the new fragment_info path
+        new_path = f"outputs/fragments/fragment_info/fragments_{rotamer_id}.json"
+        fragment_info_paths.append(new_path)
+
     best_combos_arr = riffdiff_rust_library.find_top_combos(
         combo_path,
-        rotamer_paths,
+        fragment_info_paths, # Pass the transformed paths
         n_combos,
         n_sets,
         top_n
