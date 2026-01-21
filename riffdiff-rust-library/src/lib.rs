@@ -124,8 +124,8 @@ fn recurse_write(
     let n_sets = set_lengths.len();
     if depth == n_sets {
         //let json_line = json!(current_combo);
-        let w = writer.lock().unwrap();
-        w.write_line(current_combo).expect("Unable to write line");
+        let writer_guard = writer.lock().unwrap();
+        writer_guard.write_line(current_combo).expect("Unable to write line");
         return;
     }
 
@@ -146,35 +146,55 @@ fn recurse_write(
     }
 }
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const BUFFER_CAPACITY: usize = 4096; // Number of u16 values to buffer before writing
+
 pub struct BinWriter {
     writer: Arc<Mutex<BufWriter<File>>>,
-    line_count: Arc<Mutex<usize>>,
+    line_count: AtomicUsize,
+    buffer: Arc<Mutex<Vec<u16>>>,
 }
 
 impl BinWriter {
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let file = File::create(path)?;
-        let writer = Arc::new(Mutex::new(BufWriter::new(file)));
-        let line_count = Arc::new(Mutex::new(0));
-        Ok(BinWriter { writer, line_count })
+        Ok(BinWriter {
+            writer: Arc::new(Mutex::new(BufWriter::new(file))),
+            line_count: AtomicUsize::new(0),
+            buffer: Arc::new(Mutex::new(Vec::with_capacity(BUFFER_CAPACITY))),
+        })
     }
 
     pub fn write_line(&self, line: &[u32]) -> std::io::Result<()> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut buffer_guard = self.buffer.lock().unwrap();
         for &value in line {
-            // Downcast to u8
-            let val_u16 = value as u16;
-            writer.write_all(&val_u16.to_le_bytes())?;
+            buffer_guard.push(value as u16);
         }
-        //writer.flush()?;
-        *self.line_count.lock().unwrap() += 1;
+        self.line_count.fetch_add(1, Ordering::Relaxed);
+
+        if buffer_guard.len() >= BUFFER_CAPACITY {
+            let mut writer_guard = self.writer.lock().unwrap();
+            writer_guard.write_all(bytemuck::cast_slice(&buffer_guard[..]))?;
+            buffer_guard.clear();
+        }
         Ok(())
     }
 
     pub fn close_with_metadata<P: AsRef<Path>>(&self, metadata_path: P, row_len: usize) -> std::io::Result<()> {
-        let lines = *self.line_count.lock().unwrap();
+        let mut writer_guard = self.writer.lock().unwrap();
+        let mut buffer_guard = self.buffer.lock().unwrap();
+
+        // Flush any remaining data in the buffer
+        if !buffer_guard.is_empty() {
+            writer_guard.write_all(bytemuck::cast_slice(&buffer_guard[..]))?;
+            buffer_guard.clear();
+        }
+
         // Explicitly flush the buffer
-        self.writer.lock().unwrap().flush()?;
+        writer_guard.flush()?;
+
+        let lines = self.line_count.load(Ordering::SeqCst);
 
         // Write metadata
         let mut metadata_file = File::create(metadata_path)?;
