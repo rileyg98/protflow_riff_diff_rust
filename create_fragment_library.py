@@ -1444,7 +1444,15 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
     log_and_print(f"Total number of clashes:\nbackbone-backbone clashes: {bb_bb_clashes}\nbackbone-sidechain clashes: {bb_sc_clashes}\nsidechain-sidechain clashes: {sc_sc_clashes}")
     log_and_print("If number of sidechain clashes is high, this is often a result of missing covalent bonds. Otherwise, <frag_frag_sc_clash_vdw_multiplier> can be reduced.")
 
+    for path in rotamer_paths:
+        # Extract rotamer_id from the clash_check path format
+        # e.g., 'outputs/motif_library_assembly/clash_check/{rotamer_id}_rechained.json'
+        filename = path.split('/')[-1]  # Get '{rotamer_id}_rechained.json'
+        rotamer_id = filename.replace('_rechained.json', '') # Get '{rotamer_id}'
+        new_path = f"outputs/fragments/fragment_info/fragments_{rotamer_id}.json"
+        log_and_print(f"Rotamer path is {new_path}")
     log_and_print("Generating valid combinations...")
+    
     valid_combo_path = generate_valid_combinations_parallel(n_sets, compat_maps, set_lengths)
 
     with open(valid_combo_path+".meta") as f:
