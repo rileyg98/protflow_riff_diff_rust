@@ -47,11 +47,29 @@ A SLURM cluster is not required to run this project. Adjustment of the input jso
 # RUST LIBRARY
 
 This fork of riff-diff uses a Rust library to execute CPU and RAM-intensive processing steps in parallel, and to optimise RAM usage significantly.
+You will need to install rustup if not present with the following command:
+```curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh```
 
-To build the library, install Maturin to your protflow venv then follow these steps:
+To install Maturin, you will need to run:
+```pip install maturin```
+
+To build the library, run:
+```
 cd riffdiff-rust-library
-maturin build --release
-pip install target/wheels/riffdiff_rust_library*.whl
+maturin develop
+```
+
+Two files, validator.bin and validator.bin.meta will be created in the root directory (TODO: Set to go into outputs folder) you run riffdiff from. These contain an efficient byte-packing of the valid rotamer combinations and the metadata for that byte-packing to allow loading into NumPy. The script will then load these files into the Rust library to score the top 1000 (TODO: Adjust so it is reflective of the top-n, and implements normalisation) combinations with the same methodology as the Python script, then feed that much smaller NumPy array to the Python script downstream. 
+
+# ORIGINAL PIPELINE
+
+The original fragment pipeline had scaling issues - while the pairwise compatibility mapping is distributed evenly to CPU cores, other aspects were not. This resulted in unsustainable RAM usage for theozymes with many valid rotamer combinations. The test theozyme that led to this fork was generating 5 billion valid combinations. 
+
+The fragment library pipeline involves a step that converts rotamer indexes to full rotamer information, which we estimate to take up ~1kB per rotamer. This became unsustainable at scale. The 5 billion valid combinations, with 6 residues, would become 30 billion individual rotamer objects. This attempted to consume ~30TB of RAM to produce the dataframe, which is unsustainable on a single compute node. 
+
+# EFFICIENCY GAINS
+
+The changes to use Rust for rotamer checking in the fragment library creation massively speed up the generation of valid combinations, and scales nearly 1:1 with additional CPU cores. The byte-packed file is generated to reduce RAM pressure of the valid combinations array, which was 100GB+ on the theozyme we ran through it. We then mmap that byte packing into the scoring function, and load the rotamer CSVs, extracting only the fragment scores into an array for lookup during scoring. This eliminates the dataframe production step over the whole combination dataset. Once the top 1000 are generated, the original downstream scripts are executed. 
 
 # MOTIF LIBRARY CREATION
 
