@@ -185,7 +185,7 @@ impl BinWriter {
 }
 
 struct RotamerScoreSet {
-    scores: Vec<Arc<[f32]>>
+    scores: Vec<Vec<f32>>
 }
 
 pub struct ValidComboMatrix {
@@ -263,7 +263,7 @@ use std::io::{BufReader};
 use anyhow::Result;
 use csv::ReaderBuilder;
 
-pub fn load_f32_score_array_from_csv(path: &Path) -> Result<Arc<[f32]>> {
+pub fn load_f32_score_array_from_csv(path: &Path) -> Result<Vec<f32>> {
     let file = File::open(path)
         .with_context(|| "Failed to open score CSV")?;
     let reader = BufReader::new(file);
@@ -282,5 +282,5 @@ pub fn load_f32_score_array_from_csv(path: &Path) -> Result<Arc<[f32]>> {
         scores.push(score);
     }
 
-    Ok(Arc::from(scores))
+    Ok(scores)
 }

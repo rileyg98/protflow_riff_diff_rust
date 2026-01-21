@@ -1391,7 +1391,9 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
         df.to_json(filename)
         in_files.append(filename)
         in_dfs.append(df)
-
+    # Write the in_dfs to json to allow resumption if the validator.bin is created but crashes after
+    with open("./rotamer_filenames.json", "w") as json_file: 
+        json.dump(in_files, json_file, indent=4)
     set_lengths = [len(df.index) for df in in_dfs]
     n_sets = len(in_files)
 
