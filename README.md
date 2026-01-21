@@ -48,6 +48,11 @@ A SLURM cluster is not required to run this project. Adjustment of the input jso
 
 This fork of riff-diff uses a Rust library to execute CPU and RAM-intensive processing steps in parallel, and to optimise RAM usage significantly.
 
+To build the library, install Maturin to your protflow venv then follow these steps:
+cd riffdiff-rust-library
+maturin build --release
+pip install target/wheels/riffdiff_rust_library*.whl
+
 # MOTIF LIBRARY CREATION
 
 For each of the active site residues in the theozyme, fragments will be created by inverting the rotamers and attaching a backbone fragment. The fragments are mainly selected based on rotamer preference.
