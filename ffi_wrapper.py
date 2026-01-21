@@ -53,7 +53,7 @@ def score_files(combo_path, rotamer_paths, n_combos, n_sets, top_n):
         rotamer_id = filename.replace('_rechained.json', '') # Get '{rotamer_id}'
         
         # Construct the new fragment_info path
-        new_path = f"outputs/fragments/fragment_info/fragments_{rotamer_id}.json"
+        new_path = f"outputs/fragments/fragment_info/fragments_{rotamer_id}.csv"
         fragment_info_paths.append(new_path)
 
     best_combos_arr = riffdiff_rust_library.find_top_combos(
