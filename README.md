@@ -50,16 +50,16 @@ This fork of riff-diff uses a Rust library to execute CPU and RAM-intensive proc
 You will need to install rustup if not present with the following command:
 ```curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh```
 
-To install Maturin, you will need to run:
+To install Maturin, enable your protflow venv and run:
 ```pip install maturin```
 
-To build the library, run:
+To build the library and install to the protflow venv, run:
 ```
 cd riffdiff-rust-library
 maturin develop
 ```
 
-Two files, validator.bin and validator.bin.meta will be created in the root directory (TODO: Set to go into outputs folder) you run riffdiff from. These contain an efficient byte-packing of the valid rotamer combinations and the metadata for that byte-packing to allow loading into NumPy. The script will then load these files into the Rust library to score the top 1000 (TODO: Adjust so it is reflective of the top-n, and implements normalisation) combinations with the same methodology as the Python script, then feed that much smaller NumPy array to the Python script downstream. 
+Two files, validator.bin and validator.bin.meta, will be created in the directory (TODO: Set to go into outputs folder) you run riffdiff from. These contain an efficient byte-packing of the valid rotamer combinations and the metadata for that byte-packing to allow loading into NumPy. The script will then load these files into the Rust library to score the top 1000 (TODO: Adjust so it is reflective of the top-n, and implements normalisation) combinations with the same methodology as the Python script, then feed that much smaller NumPy array to the Python script downstream. 
 
 # ORIGINAL PIPELINE
 
@@ -69,7 +69,7 @@ The fragment library pipeline involves a step that converts rotamer indexes to f
 
 # EFFICIENCY GAINS
 
-The changes to use Rust for rotamer checking in the fragment library creation massively speed up the generation of valid combinations, and scales nearly 1:1 with additional CPU cores. The byte-packed file is generated to reduce RAM pressure of the valid combinations array, which was 100GB+ on the theozyme we ran through it. We then mmap that byte packing into the scoring function, and load the rotamer CSVs, extracting only the fragment scores into an array for lookup during scoring. This eliminates the dataframe production step over the whole combination dataset. Once the top 1000 are generated, the original downstream scripts are executed. 
+The changes to use Rust for rotamer checking in the fragment library creation massively speed up the generation of valid combinations, and scales nearly 1:1 with additional CPU cores. The byte-packed file is generated to reduce RAM pressure of the valid combinations array, which was 100GB+ on the theozyme we ran through it. We then mmap that byte packing into the scoring function, and load the rotamer CSVs, extracting only the fragment scores into an array for lookup during scoring. This eliminates the dataframe production step over the whole combination dataset. Once the top 1000 are generated, the original downstream scripts are executed. On a VM with 60x Intel Xeon Gold 6230 cores, we were able to validate 599 billion combinations in approximately three hours to produce a 60GB validator.bin. We estimate the single-core generation timeframe for this would be 7.5 days. 
 
 # MOTIF LIBRARY CREATION
 
