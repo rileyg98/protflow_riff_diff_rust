@@ -775,10 +775,10 @@ def main(args):
         ligand_paths = None
 
     # setup jobstarters
-    cpu_jobstarter = LocalJobStarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
-    small_cpu_jobstarter = LocalJobStarter(max_cores=10, batch_cmds=10)
-    gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else LocalJobStarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
-    real_gpu_jobstarter = LocalJobStarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
+    cpu_jobstarter = LocalJobStarter(max_cores=args.max_cpus)
+    small_cpu_jobstarter = LocalJobStarter(max_cores=10)
+    gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else LocalJobStarter(max_cores=args.max_gpus, gpus=1)
+    real_gpu_jobstarter = LocalJobStarter(max_cores=args.max_gpus, gpus=1) # esmfold does not work on cpu
 
     # set up runners
     logging.info("Settung up runners.")
