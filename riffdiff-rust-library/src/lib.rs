@@ -67,7 +67,7 @@ fn find_top_combos(
     Ok(array.to_owned().into())
 }
 
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{Sender, bounded};
 
 const BATCH_SIZE: usize = 1000000; // How many combinations a thread accumulates before sending
 
@@ -79,6 +79,7 @@ fn generate_valid_combinations_to_file(
 ) -> PyResult<()> {
     let compat_slice = compat_data.as_slice().map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let set_lengths_slice = set_lengths.as_slice().map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    //let set_lengths_arc = Arc::new(set_lengths_slice.to_vec());
 
     let n_sets = set_lengths_slice.len();
     let max_set_size = *set_lengths_slice.iter().max().unwrap_or(&0) as usize;
@@ -94,7 +95,8 @@ fn generate_valid_combinations_to_file(
     let set_lengths_arc = Arc::new(set_lengths_slice.to_vec());
 
     // --- Producer-Consumer Implementation ---
-    let (sender, receiver) = unbounded::<Vec<Vec<u32>>>();
+    let channel_capacity = num_cpus::get() * 2;
+    let (sender, receiver) = bounded::<Vec<Vec<u32>>>(channel_capacity);
     let output_meta_path = format!("{}.meta", output_path);
 
     let writer_handle = std::thread::spawn(move || {
