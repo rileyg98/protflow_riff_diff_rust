@@ -214,13 +214,14 @@ struct RotamerScoreSet {
 pub struct ValidComboMatrix {
     pub n_combos: usize,
     pub n_sets: usize, 
-    pub data: Arc<[u16]>
+    pub data: Arc<Mmap>
 }
 
 impl ValidComboMatrix {
     fn get_combo(&self, combo_index: usize) -> &[u16] {
-        let start = combo_index * self.n_sets;
-        &self.data[start..start+self.n_sets]
+        let start = combo_index * self.n_sets * std::mem::size_of::<u16>();
+        let end = start + self.n_sets * std::mem::size_of::<u16>();
+        bytemuck::cast_slice(&self.data[start..end])
     }
 }
 #[derive(Debug, PartialEq)]
@@ -275,11 +276,10 @@ fn score_combinations(
     heap.into_inner().unwrap().into_sorted_vec()
 }
 
-fn load_u16_mmap(path: &Path) -> anyhow::Result<Arc<[u16]>> {
+fn load_u16_mmap(path: &Path) -> anyhow::Result<Arc<Mmap>> {
     let file = File::open(path).context("Failed to open combo mmap")?;
     let mmap = unsafe { Mmap::map(&file).context("Failed to mmap file")? };
-    let data: &[u16] = bytemuck::cast_slice(&mmap[..]);
-    Ok(Arc::from(data))
+    Ok(Arc::new(mmap))
 }
 
 use std::io::{BufReader};
