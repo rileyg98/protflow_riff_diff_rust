@@ -897,7 +897,7 @@ def main(args):
             backbones.set_work_dir(os.path.join(screening_dir, prefix))
 
             # run diffusion
-            diffusion_options = f"diffuser.T=50 potentials.guide_scale=5 potentials.guiding_potentials=[\\'type:substrate_contacts,weight:0\\',\\'type:custom_recenter_ROG,weight:{setting[0]},rog_weight:0,distance:{setting[1]}{recenter}\\'] potentials.guide_decay=quadratic contigmap.length={args.total_length}-{args.total_length} potentials.substrate=LIG {args.rfdiffusion_options} inference.use_gpu=True"
+            diffusion_options = f"diffuser.T=50 potentials.guide_scale=5 potentials.guiding_potentials=[\\'type:substrate_contacts,weight:0\\',\\'type:custom_recenter_ROG,weight:{setting[0]},rog_weight:0,distance:{setting[1]}{recenter}\\'] potentials.guide_decay=quadratic contigmap.length={args.total_length}-{args.total_length} potentials.substrate=LIG {args.rfdiffusion_options} +inference.use_gpu=True"
             rfdiffusion.run(
                 poses=backbones,
                 prefix="rfdiffusion",
