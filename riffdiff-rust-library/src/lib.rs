@@ -69,7 +69,7 @@ fn find_top_combos(
 
 use crossbeam_channel::{unbounded, Sender};
 
-const BATCH_SIZE: usize = 100000; // How many combinations a thread accumulates before sending
+const BATCH_SIZE: usize = 1000000; // How many combinations a thread accumulates before sending
 
 #[pyfunction]
 fn generate_valid_combinations_to_file(
