@@ -67,6 +67,10 @@ fn find_top_combos(
     Ok(array.to_owned().into())
 }
 
+use crossbeam_channel::{unbounded, Sender};
+
+const BATCH_SIZE: usize = 100000; // How many combinations a thread accumulates before sending
+
 #[pyfunction]
 fn generate_valid_combinations_to_file(
     compat_data: PyReadonlyArray2<u32>,
@@ -86,23 +90,33 @@ fn generate_valid_combinations_to_file(
         compat_map[j][i][b][a] = true;
     }
 
-    let writer = Arc::new(Mutex::new(
-        BinWriter::new(&output_path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?,
-    ));
-
     let compat_map = Arc::new(compat_map);
     let set_lengths_arc = Arc::new(set_lengths_slice.to_vec());
 
-    (0..set_lengths_slice[0]).into_par_iter().for_each(|first_idx| {
-        let mut combo = vec![first_idx];
-        recurse_write(1, &set_lengths_arc, &compat_map, &mut combo, &writer);
+    // --- Producer-Consumer Implementation ---
+    let (sender, receiver) = unbounded::<Vec<Vec<u32>>>();
+    let output_meta_path = format!("{}.meta", output_path);
+
+    let writer_handle = std::thread::spawn(move || {
+        let mut writer = BinWriter::new(&output_path).expect("Failed to create BinWriter");
+        while let Ok(batch) = receiver.recv() {
+            writer.write_batch(&batch).expect("Failed to write batch");
+        }
+        writer.close_with_metadata(&output_meta_path, n_sets).expect("Failed to write metadata");
     });
 
-    writer
-        .lock()
-        .unwrap()
-        .close_with_metadata(format!("{}.meta", output_path), n_sets)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    (0..set_lengths_slice[0]).into_par_iter().for_each_with(sender, |s, first_idx| {
+        let mut local_buffer = Vec::with_capacity(BATCH_SIZE);
+        let mut combo = vec![first_idx];
+        
+        recurse_and_send(1, &set_lengths_arc, &compat_map, &mut combo, &mut local_buffer, s);
+
+        if !local_buffer.is_empty() {
+            s.send(local_buffer).expect("Failed to send final batch");
+        }
+    });
+
+    writer_handle.join().expect("Writer thread panicked");
 
     Ok(())
 }
@@ -114,18 +128,21 @@ fn riffdiff_rust_library(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn recurse_write(
+fn recurse_and_send(
     depth: usize,
     set_lengths: &Arc<Vec<u32>>,
     compat_map: &Arc<Vec<Vec<Vec<Vec<bool>>>>>,
     current_combo: &mut Vec<u32>,
-    writer: &Arc<Mutex<BinWriter>>,
+    local_buffer: &mut Vec<Vec<u32>>,
+    sender: &Sender<Vec<Vec<u32>>>,
 ) {
     let n_sets = set_lengths.len();
     if depth == n_sets {
-        //let json_line = json!(current_combo);
-        let writer_guard = writer.lock().unwrap();
-        writer_guard.write_line(current_combo).expect("Unable to write line");
+        local_buffer.push(current_combo.clone());
+        if local_buffer.len() >= BATCH_SIZE {
+            let batch_to_send = std::mem::replace(local_buffer, Vec::with_capacity(BATCH_SIZE));
+            sender.send(batch_to_send).expect("Failed to send batch");
+        }
         return;
     }
 
@@ -140,65 +157,41 @@ fn recurse_write(
         }
         if is_valid {
             current_combo.push(idx);
-            recurse_write(depth + 1, set_lengths, compat_map, current_combo, writer);
+            recurse_and_send(depth + 1, set_lengths, compat_map, current_combo, local_buffer, sender);
             current_combo.pop();
         }
     }
 }
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-const BUFFER_CAPACITY: usize = 40960; // Number of u16 values to buffer before writing
-
 pub struct BinWriter {
-    writer: Arc<Mutex<BufWriter<File>>>,
-    line_count: AtomicUsize,
-    buffer: Arc<Mutex<Vec<u16>>>,
+    writer: BufWriter<File>,
+    line_count: usize,
 }
 
 impl BinWriter {
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let file = File::create(path)?;
         Ok(BinWriter {
-            writer: Arc::new(Mutex::new(BufWriter::new(file))),
-            line_count: AtomicUsize::new(0),
-            buffer: Arc::new(Mutex::new(Vec::with_capacity(BUFFER_CAPACITY))),
+            writer: BufWriter::new(file),
+            line_count: 0,
         })
     }
 
-    pub fn write_line(&self, line: &[u32]) -> std::io::Result<()> {
-        let mut buffer_guard = self.buffer.lock().unwrap();
-        for &value in line {
-            buffer_guard.push(value as u16);
+    pub fn write_batch(&mut self, batch: &[Vec<u32>]) -> std::io::Result<()> {
+        for line in batch {
+            for &value in line {
+                let val_u16 = value as u16;
+                self.writer.write_all(&val_u16.to_le_bytes())?;
+            }
         }
-        self.line_count.fetch_add(1, Ordering::Relaxed);
-
-        if buffer_guard.len() >= BUFFER_CAPACITY {
-            let mut writer_guard = self.writer.lock().unwrap();
-            writer_guard.write_all(bytemuck::cast_slice(&buffer_guard[..]))?;
-            buffer_guard.clear();
-        }
+        self.line_count += batch.len();
         Ok(())
     }
 
-    pub fn close_with_metadata<P: AsRef<Path>>(&self, metadata_path: P, row_len: usize) -> std::io::Result<()> {
-        let mut writer_guard = self.writer.lock().unwrap();
-        let mut buffer_guard = self.buffer.lock().unwrap();
-
-        // Flush any remaining data in the buffer
-        if !buffer_guard.is_empty() {
-            writer_guard.write_all(bytemuck::cast_slice(&buffer_guard[..]))?;
-            buffer_guard.clear();
-        }
-
-        // Explicitly flush the buffer
-        writer_guard.flush()?;
-
-        let lines = self.line_count.load(Ordering::SeqCst);
-
-        // Write metadata
+    pub fn close_with_metadata<P: AsRef<Path>>(mut self, metadata_path: P, row_len: usize) -> std::io::Result<()> {
+        self.writer.flush()?;
+        let metadata = format!("{{\"rows\": {}, \"cols\": {}, \"dtype\": \"u16\"}}", self.line_count, row_len);
         let mut metadata_file = File::create(metadata_path)?;
-        let metadata = format!("{{\"rows\": {}, \"cols\": {}, \"dtype\": \"u16\"}}", lines, row_len);
         metadata_file.write_all(metadata.as_bytes())?;
         Ok(())
     }
