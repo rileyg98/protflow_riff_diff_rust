@@ -12,7 +12,7 @@ import pandas as pd
 from Bio.PDB import Structure
 
 import protflow
-from protflow.jobstarters import SbatchArrayJobstarter
+from protflow.jobstarters import SbatchArrayJobstarter, LocalJobStarter
 import protflow.poses
 import protflow.residues
 import protflow.tools
@@ -775,10 +775,10 @@ def main(args):
         ligand_paths = None
 
     # setup jobstarters
-    cpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
-    small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10, batch_cmds=10)
-    gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
-    real_gpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
+    cpu_jobstarter = LocalJobStarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
+    small_cpu_jobstarter = LocalJobStarter(max_cores=10, batch_cmds=10)
+    gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else LocalJobStarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
+    real_gpu_jobstarter = LocalJobStarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
 
     # set up runners
     logging.info("Settung up runners.")
