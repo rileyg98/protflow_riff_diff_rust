@@ -80,10 +80,9 @@ fn generate_valid_combinations_to_file(
     let compat_slice = compat_data.as_slice().map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let set_lengths_slice = set_lengths.as_slice().map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     //let set_lengths_arc = Arc::new(set_lengths_slice.to_vec());
-
     let n_sets = set_lengths_slice.len();
+    let batch_size_elements = BATCH_SIZE * n_sets;
     let max_set_size = *set_lengths_slice.iter().max().unwrap_or(&0) as usize;
-
     let mut compat_map = vec![vec![vec![vec![false; max_set_size]; max_set_size]; n_sets]; n_sets];
     for row in compat_slice.chunks_exact(4) {
         let (i, j, a, b) = (row[0] as usize, row[1] as usize, row[2] as usize, row[3] as usize);
@@ -95,23 +94,23 @@ fn generate_valid_combinations_to_file(
     let set_lengths_arc = Arc::new(set_lengths_slice.to_vec());
 
     // --- Producer-Consumer Implementation ---
-    let channel_capacity = num_cpus::get() * 2;
-    let (sender, receiver) = bounded::<Vec<Vec<u32>>>(channel_capacity);
+    let channel_capacity = num_cpus::get() * 4;
+    let (sender, receiver) = bounded::<Vec<u16>>(channel_capacity);
     let output_meta_path = format!("{}.meta", output_path);
 
     let writer_handle = std::thread::spawn(move || {
         let mut writer = BinWriter::new(&output_path).expect("Failed to create BinWriter");
         while let Ok(batch) = receiver.recv() {
-            writer.write_batch(&batch).expect("Failed to write batch");
+            writer.write_flat_batch(&batch, n_sets).expect("Failed to write batch");
         }
         writer.close_with_metadata(&output_meta_path, n_sets).expect("Failed to write metadata");
     });
 
     (0..set_lengths_slice[0]).into_par_iter().for_each_with(sender, |s, first_idx| {
         let mut local_buffer = Vec::with_capacity(BATCH_SIZE);
-        let mut combo = vec![first_idx];
+        let mut combo = vec![first_idx as u32];
         
-        recurse_and_send(1, &set_lengths_arc, &compat_map, &mut combo, &mut local_buffer, s);
+        recurse_and_send(1, &set_lengths_arc, &compat_map, &mut combo, &mut local_buffer, s, batch_size_elements);
 
         if !local_buffer.is_empty() {
             s.send(local_buffer).expect("Failed to send final batch");
@@ -135,14 +134,16 @@ fn recurse_and_send(
     set_lengths: &Arc<Vec<u32>>,
     compat_map: &Arc<Vec<Vec<Vec<Vec<bool>>>>>,
     current_combo: &mut Vec<u32>,
-    local_buffer: &mut Vec<Vec<u32>>,
-    sender: &Sender<Vec<Vec<u32>>>,
+    local_buffer: &mut Vec<u16>,
+    sender: &Sender<Vec<u16>>,
+    batch_size_elements: usize
 ) {
     let n_sets = set_lengths.len();
     if depth == n_sets {
-        local_buffer.push(current_combo.clone());
+        local_buffer.extend(current_combo.iter().map(|&v| { v as u16}));
+        //local_buffer.push(current_combo.clone());
         if local_buffer.len() >= BATCH_SIZE {
-            let batch_to_send = std::mem::replace(local_buffer, Vec::with_capacity(BATCH_SIZE));
+            let batch_to_send = std::mem::replace(local_buffer, Vec::with_capacity(batch_size_elements));
             sender.send(batch_to_send).expect("Failed to send batch");
         }
         return;
@@ -159,7 +160,7 @@ fn recurse_and_send(
         }
         if is_valid {
             current_combo.push(idx);
-            recurse_and_send(depth + 1, set_lengths, compat_map, current_combo, local_buffer, sender);
+            recurse_and_send(depth + 1, set_lengths, compat_map, current_combo, local_buffer, sender, batch_size_elements);
             current_combo.pop();
         }
     }
@@ -187,6 +188,13 @@ impl BinWriter {
             }
         }
         self.line_count += batch.len();
+        Ok(())
+    }
+
+    pub fn write_flat_batch(&mut self, batch: &[u16], n_sets: usize) -> std::io::Result<()> {
+        let byte_slice = bytemuck::cast_slice(batch);
+        self.writer.write_all(byte_slice)?;
+        self.line_count += batch.len() / n_sets;
         Ok(())
     }
 
