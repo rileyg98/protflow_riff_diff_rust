@@ -1457,8 +1457,6 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
     
     # Create rotamer csv paths
     valid_combos = score_files(valid_combo_path, in_files, d["rows"], d["cols"], 1000)
-    valid_combos_len = valid_combos.len()
-    log_and_print(f"Scored {valid_combos_len} valid combinations")
 
     log_and_print("Extracting data for each pose...")
     flattened_dfs = []
