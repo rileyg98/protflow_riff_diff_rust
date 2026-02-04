@@ -1,6 +1,6 @@
-use crate::poses::{PoseRecord, Poses};
+use crate::poses::Poses;
 use crate::runners::Runner;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use log::{info, warn};
 use serde_json::Value;
@@ -127,8 +127,16 @@ impl Runner for ChainAdder {
                 Value::String(self.copy_chain.clone()),
             );
 
-            if let Some(ref_p) = &self.ref_pdb {
-                let ref_abs = std::fs::canonicalize(ref_p).unwrap_or_else(|_| PathBuf::from(ref_p));
+            let mut pose_ref_pdb = self.ref_pdb.clone();
+            if let Some(val) = pose.extra_fields.get("updated_reference_frags_location") {
+                if let Some(s) = val.as_str() {
+                    pose_ref_pdb = Some(s.to_string());
+                }
+            }
+
+            if let Some(ref_p) = pose_ref_pdb {
+                let ref_abs =
+                    std::fs::canonicalize(&ref_p).unwrap_or_else(|_| PathBuf::from(&ref_p));
                 opts.insert(
                     "reference_pdb".to_string(),
                     Value::String(ref_abs.to_string_lossy().to_string()),

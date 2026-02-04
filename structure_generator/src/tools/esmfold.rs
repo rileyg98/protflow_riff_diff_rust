@@ -1,8 +1,8 @@
 use crate::poses::{PoseRecord, Poses};
 use crate::runners::Runner;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use log::{info, warn};
+use log::info;
 use serde_json::Value;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -144,7 +144,7 @@ impl ESMFold {
                 fs::copy(&pdb_path, &new_pdb_path).await?;
 
                 let content = fs::read_to_string(path).await?;
-                let mut data: std::collections::HashMap<String, Value> =
+                let data: std::collections::HashMap<String, Value> =
                     serde_json::from_str(&content)?;
 
                 // Extract description from filename or json?

@@ -15,7 +15,7 @@ use crate::tools::{
 };
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use log::{error, info};
+use log::info;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -41,6 +41,8 @@ enum Commands {
         num_diffusions: usize,
     },
     Refinement {
+        #[arg(long, default_value_t = 1)]
+        cycles: usize,
         #[arg(long, default_value_t = 8)]
         nseq: usize,
     },
@@ -100,77 +102,129 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Commands::Screening { num_diffusions } => {
-            info!("Running Screening step");
-            let script_path = config.rfdiffusion_script.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "RFDiffusion script not defined in config or env (RFDIFFUSION_SCRIPT)"
-                )
-            })?;
+            info!(
+                "Running Screening workflow (num_diffusions: {})",
+                num_diffusions
+            );
 
-            let script_canon = std::fs::canonicalize(script_path)?;
-            let mut runner = RFDiffusion::new(&config.python_path, script_canon.to_str().unwrap());
-            runner.num_diffusions = num_diffusions;
+            // 1. RFDiffusion
+            let rfdiff_script = config
+                .rfdiffusion_script
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("RFDiffusion script not defined"))?;
+            let rfdiff_canon = std::fs::canonicalize(rfdiff_script)?;
+            let rfdiff_python = config
+                .rfdiffusion_python
+                .as_ref()
+                .unwrap_or(&config.python_path);
+            let mut rfdiff = RFDiffusion::new(rfdiff_python, rfdiff_canon.to_str().unwrap());
+            rfdiff.num_diffusions = num_diffusions;
+            rfdiff.run(&mut poses, "screening_rfdiffusion").await?;
 
-            runner.run(&mut poses, "rfdiffusion").await?;
-        }
-        Commands::Refinement { nseq } => {
-            info!("Running Refinement step (LigandMPNN -> ESMFold -> Rosetta)");
+            // 2. ChainAdder (renumber/copy ref)
+            let aux_scripts = config
+                .protein_edits_scripts_dir
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Auxiliary scripts dir not defined"))?;
+            let ed_python = config
+                .protein_edits_python
+                .as_ref()
+                .unwrap_or(&config.python_path);
 
-            // 1. LigandMPNN
+            let adder = ChainAdder::new(ed_python, aux_scripts, "Z");
+            adder.run(&mut poses, "screening_chain_adder").await?;
+
+            // 3. LigandMPNN
             let mpnn_script = config
                 .ligandmpnn_script
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("LigandMPNN script not defined"))?;
             let mpnn_canon = std::fs::canonicalize(mpnn_script)?;
-            let mut mpnn = LigandMPNN::new(&config.python_path, mpnn_canon.to_str().unwrap());
-            mpnn.nseq = nseq;
-            mpnn.run(&mut poses, "ligandmpnn").await?;
-
-            // 2. ESMFold
-            // Note: LigandMPNN output poses are now FASTA files.
-            let esm_script_dir = config.esmfold_python.as_ref().map(|s| {
-                // Assuming esmfold_python config points to python executable or script dir?
-                // Actually config says `esmfold_python`. `protflow` uses `AUXILIARY_RUNNER_SCRIPTS_DIR`.
-                // In my `config.rs`, I have `esmfold_python` and `python_path`.
-                // `ESMFold::new` takes `python_path` and `script_dir`.
-                // `script_dir` should contain `esmfold_inference.py`.
-                // I should add `auxiliary_scripts_dir` to `Config`?
-                // For now, let's assume `esmfold_python` points to the python, and we need script dir.
-                // Or maybe `esmfold_python` IS the script path in my config design?
-                // Let's check config.rs definition.
-                s
-            });
-
-            // Re-checking config.rs: esmfold_python is Option<String>.
-            // I should explicitly fetch script paths.
-            // For now, let's assume standard location or require config update.
-            // Using `esmfold_python` as the python path specific for ESMFold?
-            // And `protein_edits_scripts_dir` from config for scripts?
-            // Wait, `Config` struct has `protein_edits_scripts_dir`. Can I use that for ESMFold script too?
-            // Unlikely.
-
-            // Let's assume for now `protein_edits_scripts_dir` holds all auxiliary scripts including `esmfold_inference.py`.
-            let aux_scripts = config
-                .protein_edits_scripts_dir
+            let mpnn_python = config
+                .ligandmpnn_python
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Auxiliary scripts dir not defined"))?;
+                .unwrap_or(&config.python_path);
+            let mut mpnn = LigandMPNN::new(mpnn_python, mpnn_canon.to_str().unwrap());
+            mpnn.nseq = 1; // Default for screening
+            mpnn.run(&mut poses, "screening_mpnn").await?;
 
+            // 4. Rosetta (bbopt)
+            let rosetta_bin = config
+                .rosetta_bin
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Rosetta bin path not defined"))?;
+            let rosetta = Rosetta::new(rosetta_bin);
+            rosetta.run(&mut poses, "screening_rosetta").await?;
+
+            // 5. ESMFold
             let esm_python = config
                 .esmfold_python
                 .as_ref()
                 .unwrap_or(&config.python_path);
             let esmfold = ESMFold::new(esm_python, aux_scripts);
-            esmfold.run(&mut poses, "esmfold").await?;
+            esmfold.run(&mut poses, "screening_esmfold").await?;
 
-            // 3. Rosetta
+            // 6. Filtering
+            poses.filter_poses_by_value("screening_esmfold_plddt", 70.0, ">=");
+            poses.filter_poses_by_rank(10, "screening_rosetta_total_score", true);
+        }
+        Commands::Refinement { cycles, nseq } => {
+            info!(
+                "Running Refinement step ({} cycles, nseq: {})",
+                cycles, nseq
+            );
+
+            let mpnn_script = config
+                .ligandmpnn_script
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("LigandMPNN script not defined"))?;
+            let mpnn_canon = std::fs::canonicalize(mpnn_script)?;
+            let mpnn_python = config
+                .ligandmpnn_python
+                .as_ref()
+                .unwrap_or(&config.python_path);
+            let mut mpnn = LigandMPNN::new(mpnn_python, mpnn_canon.to_str().unwrap());
+            mpnn.nseq = nseq;
+
+            let aux_scripts = config
+                .protein_edits_scripts_dir
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Auxiliary scripts dir not defined"))?;
+            let esm_python = config
+                .esmfold_python
+                .as_ref()
+                .unwrap_or(&config.python_path);
+            let esmfold = ESMFold::new(esm_python, aux_scripts);
+
             let rosetta_bin = config
                 .rosetta_bin
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Rosetta bin path not defined"))?;
             let mut rosetta = Rosetta::new(rosetta_bin);
-            // hardcode score only or relax?
-            rosetta.options = "-score:weights ref2015".to_string();
-            rosetta.run(&mut poses, "rosetta_score").await?;
+
+            for i in 1..=cycles {
+                info!("--- Refinement Cycle {} ---", i);
+
+                // 1. LigandMPNN
+                info!("Cycle {}: Running LigandMPNN", i);
+                mpnn.run(&mut poses, &format!("cycle_{}_mpnn", i)).await?;
+
+                // 2. ESMFold
+                info!("Cycle {}: Running ESMFold", i);
+                esmfold
+                    .run(&mut poses, &format!("cycle_{}_esmfold", i))
+                    .await?;
+
+                // 3. Rosetta
+                info!("Cycle {}: Running Rosetta", i);
+                rosetta.options = "-score:weights ref2015".to_string();
+                rosetta
+                    .run(&mut poses, &format!("cycle_{}_rosetta", i))
+                    .await?;
+
+                // Filter? For now just keep all.
+                // poses.filter_poses_by_rank(5, &format!("cycle_{}_rosetta_total_score", i), true);
+            }
         }
         Commands::Rosetta {
             application,
@@ -180,17 +234,6 @@ async fn main() -> anyhow::Result<()> {
                 .rosetta_bin
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Rosetta bin path not defined"))?;
-            // Note: rosetta_bin in config might be the directory or the executable?
-            // `Rosetta::new` takes `script_path`.
-            // If `rosetta_bin` is directory, we join application?
-            // My implementation of `Rosetta::new` sets `script_path`.
-            // User usually provides path to `rosetta_scripts` or uses application arg?
-            // My implementation uses `self.script_path` as the executable.
-            // So `config.rosetta_bin` should be the executable path.
-            // `application` arg is essentially unused in `run` command construction IF script_path is the executable.
-            // Wait, `rosetta.rs`: `format!("{} ...", self.script_path, ...)`
-            // So `script_path` IS the executable. The `application` field is just for logging?
-            // Yes.
 
             let mut runner = Rosetta::new(rosetta_bin);
             runner.application = application;
@@ -219,7 +262,13 @@ async fn main() -> anyhow::Result<()> {
                 .protein_edits_scripts_dir
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Auxiliary scripts dir not defined"))?;
-            let mut runner = ChainRemover::new(&config.python_path, aux_scripts);
+            let mut runner = ChainRemover::new(
+                config
+                    .protein_edits_python
+                    .as_ref()
+                    .unwrap_or(&config.python_path),
+                aux_scripts,
+            );
             runner.chains = Some(chains);
             runner.run(&mut poses, "chain_remover").await?;
         }
@@ -231,7 +280,14 @@ async fn main() -> anyhow::Result<()> {
                 .protein_edits_scripts_dir
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Auxiliary scripts dir not defined"))?;
-            let mut runner = ChainAdder::new(&config.python_path, aux_scripts, &copy_chain);
+            let mut runner = ChainAdder::new(
+                config
+                    .protein_edits_python
+                    .as_ref()
+                    .unwrap_or(&config.python_path),
+                aux_scripts,
+                &copy_chain,
+            );
             runner.ref_pdb = Some(ref_pdb);
             runner.run(&mut poses, "chain_adder").await?;
         }

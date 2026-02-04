@@ -1,7 +1,7 @@
-use crate::poses::{PoseRecord, Poses};
+use crate::poses::Poses;
 use anyhow::{Context, Result};
 use log::{error, info};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::process::Command;
 
 use async_trait::async_trait;

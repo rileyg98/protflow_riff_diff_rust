@@ -10,6 +10,9 @@ pub struct Config {
     pub ligandmpnn_script: Option<String>,
     pub rosetta_bin: Option<String>,
     pub esmfold_python: Option<String>,
+    pub rfdiffusion_python: Option<String>,
+    pub ligandmpnn_python: Option<String>,
+    pub protein_edits_python: Option<String>,
     pub protein_edits_scripts_dir: Option<String>,
     pub python_path: String,
 }
@@ -34,6 +37,9 @@ impl Config {
                 ligandmpnn_script: None,
                 rosetta_bin: None,
                 esmfold_python: None,
+                rfdiffusion_python: None,
+                ligandmpnn_python: None,
+                protein_edits_python: None,
                 protein_edits_scripts_dir: None,
                 python_path: "python".to_string(), // Default python
             }
@@ -51,6 +57,15 @@ impl Config {
         }
         if let Ok(val) = env::var("ESMFOLD_PYTHON_PATH") {
             config.esmfold_python = Some(val);
+        }
+        if let Ok(val) = env::var("RFDIFFUSION_PYTHON_PATH") {
+            config.rfdiffusion_python = Some(val);
+        }
+        if let Ok(val) = env::var("LIGANDMPNN_PYTHON_PATH") {
+            config.ligandmpnn_python = Some(val);
+        }
+        if let Ok(val) = env::var("PROTEIN_EDITS_PYTHON_PATH") {
+            config.protein_edits_python = Some(val);
         }
         if let Ok(val) = env::var("AUXILIARY_RUNNER_SCRIPTS_DIR") {
             config.protein_edits_scripts_dir = Some(val);

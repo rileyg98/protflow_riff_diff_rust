@@ -2,10 +2,10 @@ use crate::poses::{PoseRecord, Poses};
 use crate::runners::{LocalJobStarter, Runner};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use log::{info, warn};
+use log::warn;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::process::Command;
 
 pub struct RFDiffusion {

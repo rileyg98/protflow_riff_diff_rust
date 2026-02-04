@@ -4,13 +4,12 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log::{info, warn};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use tokio::fs;
 
 pub struct Rosetta {
     pub script_path: String,
-    pub python_path: String, // Not used directly for binary execution but consistent with other tools
     pub nstruct: usize,
     pub application: String,
     pub options: String,
@@ -20,7 +19,6 @@ impl Rosetta {
     pub fn new(script_path: &str) -> Self {
         Self {
             script_path: script_path.to_string(),
-            python_path: "python".to_string(),
             nstruct: 1,
             application: "rosetta_scripts.linuxgccrelease".to_string(), // Default app
             options: "".to_string(),
@@ -65,7 +63,7 @@ impl Runner for Rosetta {
         let mut next_poses_records = Vec::new();
 
         // Iterate over input poses (using df field)
-        for (i, pose) in poses.df.iter().enumerate() {
+        for (_i, pose) in poses.df.iter().enumerate() {
             let input_pdb = &pose.poses; // Field is 'poses' (path string)
             let pose_filename = Path::new(input_pdb).file_stem().unwrap().to_str().unwrap();
 

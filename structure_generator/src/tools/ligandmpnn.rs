@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use log::warn;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct LigandMPNN {
     pub python_path: String,
@@ -95,13 +95,20 @@ impl Runner for LigandMPNN {
                         let scores = Self::parse_fasta_header(header);
 
                         let mut rec = pose.clone();
-                        rec.poses = expected_fa.to_string_lossy().to_string(); // Update poses to point to FASTA
+
+                        // Check if sequence threaded PDB exists
+                        let seq_name = header.split(", ").next().unwrap_or(&pdb_name);
+                        let expected_pdb =
+                            work_dir.join("backbones").join(format!("{}.pdb", seq_name));
+
+                        if expected_pdb.exists() {
+                            rec.poses = expected_pdb.to_string_lossy().to_string();
+                        } else {
+                            rec.poses = expected_fa.to_string_lossy().to_string();
+                        }
+
                         rec.extra_fields.extend(scores);
                         new_records.push(rec);
-                        // LigandMPNN usually names them <name>, <name>_1, <name>_2...
-                        // Parsing the header might give us the name?
-                        // LigandMPNN output header format varies.
-                        // Assuming simplest integration for now.
                     }
                 }
             } else {

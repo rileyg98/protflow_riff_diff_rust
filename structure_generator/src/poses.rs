@@ -47,8 +47,45 @@ impl Poses {
         Ok(())
     }
 
-    pub fn add_prefix(&mut self, prefix: &str) {
-        // Implementation to prefix columns/keys if needed, similar to Python
-        // For now, this might not be strictly necessary if we handle it in the runners
+    pub fn filter_poses_by_value(&mut self, score_col: &str, value: f64, operator: &str) {
+        self.df.retain(|rec| {
+            if let Some(v) = rec.extra_fields.get(score_col) {
+                if let Some(num) = v.as_f64() {
+                    match operator {
+                        ">=" => num >= value,
+                        "<=" => num <= value,
+                        ">" => num > value,
+                        "<" => num < value,
+                        "==" => (num - value).abs() < 1e-6,
+                        _ => true,
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn filter_poses_by_rank(&mut self, n: usize, score_col: &str, ascending: bool) {
+        self.df.sort_by(|a, b| {
+            let va = a
+                .extra_fields
+                .get(score_col)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(f64::INFINITY);
+            let vb = b
+                .extra_fields
+                .get(score_col)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(f64::INFINITY);
+            if ascending {
+                va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
+        self.df.truncate(n);
     }
 }
