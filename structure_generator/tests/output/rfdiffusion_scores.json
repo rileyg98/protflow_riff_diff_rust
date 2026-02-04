@@ -1,0 +1,16 @@
+[
+  {
+    "input_poses": "basic_test_input.pdb",
+    "poses": "/home/fragg/protflow_riff_diff_rust/structure_generator/tests/output/rfdiffusion/output_pdbs/basic_test_input_0000.pdb",
+    "poses_description": "basic_test_input_0000",
+    "con_ref_pdb_idx": [],
+    "input_pdb": "basic_test_input.pdb",
+    "perres_plddt": [
+      80.0,
+      90.0
+    ],
+    "con_hal_pdb_idx": [],
+    "plddt": 85.0,
+    "sampled_mask": []
+  }
+]
