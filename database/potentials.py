@@ -611,3 +611,5 @@ require_binderlen      = { 'binder_ROG',
                            'binder_ncontacts',
                            'interface_ncontacts'}
 
+
+require_hotspot_res    = set()  # no potentials currently require hotspot residues
