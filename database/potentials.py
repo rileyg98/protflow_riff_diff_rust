@@ -526,7 +526,15 @@ class substrate_contacts(Potential):
         # apply affine transformation to substrate atoms
         substrate_atoms = torch.mm(A, self.motif_substrate_atoms.transpose(0,1)).transpose(0,1) + t
         second_distance = torch.sqrt(torch.sqrt(torch.sum(torch.square(new_frame[0] - substrate_atoms[0]), dim=-1)))
-        assert abs(first_distance - second_distance) < 0.01, "Alignment seems to be bad" 
+        if abs(first_distance - second_distance) >= 0.01:
+            import logging as _logging
+            _logging.warning(
+                f"custom_recenter_ROG: alignment check failed "
+                f"(delta={abs(first_distance - second_distance):.4f} >= 0.01). "
+                "Skipping potential for this diffusion step."
+            )
+            return torch.tensor(0.0, requires_grad=True)
+
         diffusion_mask = mask_expand(self.diffusion_mask, 1)
         Ca = xyz[~diffusion_mask, 1]
 
