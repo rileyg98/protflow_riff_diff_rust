@@ -1,0 +1,257 @@
+# How ProtFlow Actually Works — Local Execution Guide
+
+This document explains the internal chain from `structure_generation.py` all the way down to `subprocess.Popen`, what you need to configure, and exactly what to put where. No SLURM assumed.
+
+---
+
+## The Execution Chain (Plain English)
+
+When you call `rfdiffusion.run(poses=..., prefix=..., jobstarter=gpu_jobstarter)`, here is what happens, step by step:
+
+```
+structure_generation.py
+  └─ Runner.run()           # e.g. RFdiffusion.run()
+       └─ writes shell commands as strings  (e.g. "python /path/to/run_inference.py ...")
+            └─ jobstarter.start(cmds=[...])
+                 └─ if LocalJobStarter  → subprocess.Popen(cmd, shell=True, executable="/bin/bash")
+                 └─ if SbatchArrayJobstarter → writes cmds to file, then calls `sbatch ...`
+```
+
+**The JobStarter is just a subprocess launcher.** `LocalJobStarter` literally calls `subprocess.Popen` for each command and manages how many run at once. `SbatchArrayJobstarter` writes those same commands to a file and submits it to SLURM. The commands themselves are identical — the shell strings built by `RFdiffusion.write_cmd()`, `ESMFold.write_cmd()` etc.
+
+---
+
+## What the Config File Does
+
+ProtFlow's `config.py` is **just a Python file full of path variables**. Each Runner reads the relevant path out of it at startup:
+
+```python
+# Inside RFdiffusion.__init__():
+config = require_config()
+self.script_path = load_config_path(config, "RFDIFFUSION_SCRIPT_PATH")
+self.python_path = load_config_path(config, "RFDIFFUSION_PYTHON_PATH")
+```
+
+So when RFdiffusion eventually builds its shell command, it's:
+
+```python
+f"sleep {timer}; {self.python_path} {self.script_path} {opts_str}"
+# e.g.:
+# "sleep 1.23; /home/fragg/miniconda3/envs/SE3nv/bin/python /home/fragg/tools/RFdiffusion/scripts/run_inference.py ..."
+```
+
+That string is what `LocalJobStarter` hands to `subprocess.Popen`. **The config file just sets which Python binary and which script file to use.**
+
+---
+
+## Where ProtFlow Looks for config.py
+
+ProtFlow searches in this order (first match wins):
+
+| Priority | Location |
+|---|---|
+| 0 | Path saved by `protflow-set-config` (stored at `~/.config/protflow/config.path`) |
+| 1 | `$PROTFLOW_CONFIG` environment variable |
+| 2 | `~/.config/protflow/config.py` |
+| 3 | `config.py` bundled inside the protflow package itself |
+
+**Recommended**: use `~/.config/protflow/config.py`. Create it once and forget it:
+
+```bash
+# Create the directory
+mkdir -p ~/.config/protflow
+
+# Copy the template from the bundled ProtFlow in this repo
+cp /home/fragg/protflow_riff_diff_rust/ProtFlow/protflow/config_template.py \
+   ~/.config/protflow/config.py
+
+# Then edit it
+nano ~/.config/protflow/config.py
+```
+
+---
+
+## What to Put in config.py — Field by Field
+
+Here is what each field controls and what to set it to for a local run. **Leave fields empty (`""`) for tools you haven't installed yet** — ProtFlow will only complain if you actually try to use that runner.
+
+```python
+# ──────────────────────────────────────────────────────────────────────────────
+# REQUIRED: ProtFlow internal paths
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Root of the ProtFlow repo you cloned (used to find auxiliary scripts)
+PROTFLOW_DIR = "/home/fragg/protflow_riff_diff_rust/ProtFlow"
+
+# The Python interpreter in the conda env where protflow is pip-installed
+# (the same env you run structure_generation.py from)
+PROTFLOW_ENV = "/home/fragg/miniconda3/envs/protflow/bin/python3"
+
+# Where ProtFlow keeps its helper scripts (Rosetta XML files, etc.)
+# This is always: {PROTFLOW_DIR}/protflow/tools/runners_auxiliary_scripts/
+AUXILIARY_RUNNER_SCRIPTS_DIR = "/home/fragg/protflow_riff_diff_rust/ProtFlow/protflow/tools/runners_auxiliary_scripts/"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RFDIFFUSION
+# ──────────────────────────────────────────────────────────────────────────────
+# The main inference script inside the RFdiffusion clone
+RFDIFFUSION_SCRIPT_PATH = "/home/fragg/tools/RFdiffusion/scripts/run_inference.py"
+
+# Python binary from the SE3nv conda env (created by RFdiffusion's env/SE3nv.yml)
+RFDIFFUSION_PYTHON_PATH = "/home/fragg/miniconda3/envs/SE3nv/bin/python"
+
+# Optional: commands to run before RFdiffusion (e.g. module loads on HPC).
+# Leave empty for local.
+RFDIFFUSION_PRE_CMD = ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ESMFOLD
+# ──────────────────────────────────────────────────────────────────────────────
+# Python binary from the esmfold conda env
+ESMFOLD_PYTHON_PATH = "/home/fragg/miniconda3/envs/esmfold/bin/python"
+ESMFOLD_PRE_CMD = ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LIGANDMPNN
+# ──────────────────────────────────────────────────────────────────────────────
+LIGANDMPNN_SCRIPT_PATH = "/home/fragg/tools/LigandMPNN/run.py"
+LIGANDMPNN_PYTHON_PATH = "/home/fragg/miniconda3/envs/ligandmpnn/bin/python3"
+LIGANDMPNN_PRE_CMD = ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ROSETTA
+# ──────────────────────────────────────────────────────────────────────────────
+# Directory containing the rosetta_scripts binary (NOT the binary itself)
+ROSETTA_BIN_PATH = "/home/fragg/tools/rosetta_bin_linux_3.13/main/source/bin/"
+ROSETTA_PRE_CMD = ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COLABFOLD (LocalColabFold / AF2)
+# ──────────────────────────────────────────────────────────────────────────────
+# The colabfold_batch binary
+COLABFOLD_SCRIPT_PATH = "/home/fragg/tools/localcolabfold/colabfold-conda/bin/colabfold_batch"
+COLABFOLD_PRE_CMD = ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ATTNPACKER (optional)
+# ──────────────────────────────────────────────────────────────────────────────
+ATTNPACKER_PYTHON_PATH = ""   # leave empty if not using AttnPacker
+ATTNPACKER_DIR_PATH = ""
+ATTNPACKER_PRE_CMD = ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Everything else — leave empty if not used
+# ──────────────────────────────────────────────────────────────────────────────
+PROTEIN_GENERATOR_SCRIPT_PATH = ""
+PROTEIN_GENERATOR_PYTHON_PATH = ""
+FPOCKET_PATH = ""
+DSSP_PATH = ""
+BOLTZ_PATH = ""
+BOLTZ_PYTHON = ""
+BOLTZ_PRE_CMD = ""
+GROMACS_PATH = ""
+PLACER_SCRIPT_PATH = ""
+PLACER_PYTHON_PATH = ""
+PLACER_PRE_CMD = ""
+ESM_PYTHON_PATH = ""
+ESM_PRE_CMD = ""
+```
+
+> [!IMPORTANT]
+> **Find your actual conda env paths with:**
+> ```bash
+> conda activate SE3nv && which python   # → RFDIFFUSION_PYTHON_PATH
+> conda activate esmfold && which python # → ESMFOLD_PYTHON_PATH
+> conda activate ligandmpnn && which python # → LIGANDMPNN_PYTHON_PATH
+> ```
+
+---
+
+## How LocalJobStarter Connects to Popen
+
+`LocalJobStarter` is in `ProtFlow/protflow/jobstarters.py`. Its `start()` method does this:
+
+```python
+def start_process(command, log_file, error_file):
+    with open(log_file, 'w') as out_file, open(error_file, 'w') as err_file:
+        process = subprocess.Popen(
+            command,          # the shell string e.g. "python /path/run_inference.py ..."
+            env=env,          # inherits your current environment (PATH, CUDA_*, etc.)
+            executable="/bin/bash",
+            shell=True,
+            stdout=out_file,
+            stderr=err_file
+        )
+    return process
+```
+
+It then manages concurrency: it runs at most `max_cores` processes simultaneously, polling them and starting new ones as old ones finish.
+
+**The key point**: the command string that `LocalJobStarter` receives was built using the paths from `config.py`. So `config.py` is the only thing you need to configure. The `LocalJobStarter` itself needs no registration — it's just Python code, no daemon, no service.
+
+---
+
+## The Four Jobstarters in structure_generation.py
+
+`structure_generation.py` creates four jobstarters (lines 778–781). Here is what each one is for and what the local equivalent should be:
+
+| Variable | Used for | SLURM version | Local version |
+|---|---|---|---|
+| `cpu_jobstarter` | Rosetta, RMSD metrics, protein edits | `SbatchArrayJobstarter(max_cores=N_cpus)` | `LocalJobStarter(max_cores=N_cpus)` |
+| `small_cpu_jobstarter` | Lightweight CPU tasks (RMSD, ligand stats) | `SbatchArrayJobstarter(max_cores=10)` | `LocalJobStarter(max_cores=4)` |
+| `gpu_jobstarter` | RFdiffusion, LigandMPNN (can use CPU with `--prefer_cpu`) | `SbatchArrayJobstarter(max_cores=N_gpus, gpus=1)` | `LocalJobStarter(max_cores=1)` |
+| `real_gpu_jobstarter` | ESMFold (GPU mandatory) | `SbatchArrayJobstarter(max_cores=N_gpus, gpus=1)` | `LocalJobStarter(max_cores=1)` |
+
+For a single-GPU workstation: `max_cores=1` for GPU runners keeps only one GPU job running at a time (which is all you have). For CPU runners, set it to however many physical cores you want to dedicate.
+
+---
+
+## Verifying Your Config is Loaded
+
+Quick test — run this in your protflow Python env:
+
+```python
+import protflow
+config = protflow.require_config()
+print(config.__file__)          # shows which config.py was loaded
+print(config.RFDIFFUSION_SCRIPT_PATH)
+print(config.ESMFOLD_PYTHON_PATH)
+```
+
+If it prints the paths correctly, ProtFlow will be able to build valid shell commands for the runners.
+
+---
+
+## Common Pitfalls
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `MissingConfigError` | No config.py found anywhere | Create `~/.config/protflow/config.py` from the template |
+| `MissingConfigSettingError: RFDIFFUSION_SCRIPT_PATH` | Field is `""` in config | Fill in the actual path |
+| `FileNotFoundError` on a path in config | Path doesn't exist on disk | Check the path; make sure the tool is installed |
+| ESMFold crashes with CUDA error | `real_gpu_jobstarter` set to `max_cores>1` with 1 GPU | Set `max_cores=1` |
+| Tool runs but produces no output | Wrong Python path in config (e.g. pointing to a different env that lacks the tool's deps) | Double-check with `which python` inside the correct conda env |
+| `ProcessError: Subprocess Crashed` | The shell command failed; check the `.err` log file in the working dir | Look at `{working_dir}/{prefix}/process_0.err` |
+
+---
+
+## Summary: Steps to Get Running Locally
+
+1. **Install tools** using `setup_tools.py` (or manually follow the README).
+2. **Create `~/.config/protflow/config.py`** from the template and fill in all the paths.
+3. **Verify config** with the quick Python test above.
+4. **Run fragment library** (already works locally):
+   ```bash
+   cd examples
+   python ../create_fragment_library.py --riff_diff_dir ../ --input_json inputs/in_local.json
+   ```
+5. **Run structure generation locally** (after this PR is applied):
+   ```bash
+   python structure_generation.py \
+     --riff_diff_dir . \
+     --working_dir outputs \
+     --screen_input_json outputs/selected_paths.json \
+     --jobstarter Local \
+     --max_cpus 8 \
+     --max_gpus 1
+   ```

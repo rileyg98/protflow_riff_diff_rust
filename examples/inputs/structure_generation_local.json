@@ -1,0 +1,35 @@
+{
+  "_comment": "JSON config for structure_generation.py local runs. Pass with: --config this_file.json",
+  "_comment2": "CLI flags always override values here. Delete/comment keys you don't want to set.",
+
+  "jobstarter": "Local",
+
+  "max_cpus": 8,
+  "max_gpus": 1,
+
+  "screen_num_rfdiffusions": 3,
+  "screen_num_mpnn_sequences": 10,
+  "screen_num_seq_thread_sequences": 2,
+  "screen_esm_input_poses": 100,
+  "screen_input_poses": 50,
+  "screen_input_selection": "weighted",
+
+  "ref_cycles": 3,
+  "ref_input_poses": 20,
+  "ref_num_mpnn_seqs": 10,
+  "ref_seq_thread_num_mpnn_seqs": 2,
+
+  "eval_input_poses": 50,
+  "eval_input_poses_per_bb": 10,
+
+  "skip_refinement": false,
+  "skip_evaluation": false,
+
+  "rfdiffusion_max_rog": 18,
+  "flanker_length": 30,
+  "total_length": 200,
+  "flanking": "split",
+
+  "contacts_target_value": 9,
+  "min_contacts": 5
+}

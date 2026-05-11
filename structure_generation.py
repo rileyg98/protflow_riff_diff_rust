@@ -12,7 +12,7 @@ import pandas as pd
 from Bio.PDB import Structure
 
 import protflow
-from protflow.jobstarters import SbatchArrayJobstarter
+from protflow.jobstarters import SbatchArrayJobstarter, LocalJobStarter
 import protflow.poses
 import protflow.residues
 import protflow.tools
@@ -775,10 +775,23 @@ def main(args):
         ligand_paths = None
 
     # setup jobstarters
-    cpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
-    small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10, batch_cmds=10)
-    gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
-    real_gpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
+    # --jobstarter Local  → runs tools directly via subprocess.Popen (no SLURM needed)
+    # --jobstarter SbatchArray → submits job arrays to SLURM (default, original behaviour)
+    if args.jobstarter == "Local":
+        logging.info("Using LocalJobStarter — all tools will run as local subprocesses.")
+        cpu_jobstarter       = LocalJobStarter(max_cores=args.max_cpus)
+        small_cpu_jobstarter = LocalJobStarter(max_cores=min(4, args.max_cpus))
+        # For GPU runners on a local machine, max_cores controls how many concurrent
+        # GPU jobs are allowed.  Use --max_gpus to set this (default 1 for a workstation).
+        gpu_jobstarter       = LocalJobStarter(max_cores=args.max_cpus) if args.prefer_cpu else LocalJobStarter(max_cores=args.max_gpus)
+        real_gpu_jobstarter  = LocalJobStarter(max_cores=args.max_gpus)  # esmfold does not work on cpu
+    elif args.jobstarter == "SbatchArray":
+        cpu_jobstarter       = SbatchArrayJobstarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
+        small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10, batch_cmds=10)
+        gpu_jobstarter       = cpu_jobstarter if args.prefer_cpu else SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
+        real_gpu_jobstarter  = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)  # esmfold does not work on cpu
+    else:
+        raise ValueError(f"--jobstarter must be 'SbatchArray' or 'Local', not '{args.jobstarter}'")
 
     # set up runners
     logging.info("Settung up runners.")
@@ -1931,8 +1944,14 @@ if __name__ == "__main__":
     import argparse
     argparser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
+    # ── JSON config file (optional) ──────────────────────────────────────────
+    # Any key in this JSON file sets the corresponding argparse argument.
+    # CLI flags take precedence over JSON values.
+    # Example: {"jobstarter": "Local", "max_cpus": 8, "screen_num_rfdiffusions": 2}
+    argparser.add_argument("--config", type=str, default=None, help="Path to a JSON file containing default argument values. CLI flags override JSON values.")
+
     argparser.add_argument("--riff_diff_dir", type=str, default=".", help="Directory that contains the Riff-Diff repository.")
-    argparser.add_argument("--working_dir", type=str, required=True, help="output directory.")
+    argparser.add_argument("--working_dir", type=str, required=False, default=None, help="output directory.")
 
     # general optionals
     argparser.add_argument("--rosetta_scripts_application", type=str, default="rosetta_scripts.cxx11threadserialization.linuxclangrelease", help="Name of the Rosetta scripts applications (not the full path!)")
@@ -1943,9 +1962,11 @@ if __name__ == "__main__":
     argparser.add_argument("--use_reduced_motif", action="store_true", help="Instead of using the full fragments during backbone optimization, just use residues directly adjacent to fixed_residues. Also affects motif_bb_rmsd etc.")
 
     # jobstarter
+    argparser.add_argument("--jobstarter", type=str, default="SbatchArray", choices=["SbatchArray", "Local"],
+                           help="'SbatchArray' submits jobs to SLURM (default). 'Local' runs all tools as local subprocesses (no SLURM required).")
     argparser.add_argument("--prefer_cpu", action="store_true", help="Use CPUs instead of GPUs, where possible (ESMFold will only work with GPU).")
-    argparser.add_argument("--max_gpus", type=int, default=10, help="How many GPUs do you want to use at once?")
-    argparser.add_argument("--max_cpus", type=int, default=1000, help="How many CPUs do you want to use at once?")
+    argparser.add_argument("--max_gpus", type=int, default=1, help="How many GPUs to use at once (for SbatchArray: SLURM GPU slots; for Local: concurrent GPU subprocesses).")
+    argparser.add_argument("--max_cpus", type=int, default=1000, help="How many CPUs to use at once (for SbatchArray: SLURM slots; for Local: concurrent CPU subprocesses).")
 
     # screening
     argparser.add_argument("--screen_input_json", type=str, default=None, help="Read in a poses json file containing input poses for screening (e.g. the selected_paths.json from motif generation or the successful_input_motifs.json from a previous screening run).")
@@ -2026,5 +2047,25 @@ if __name__ == "__main__":
 
     arguments = argparser.parse_args()
 
+    # ── Load JSON config, then let CLI flags override ─────────────────────────
+    if arguments.config:
+        with open(arguments.config, "r", encoding="utf-8") as f:
+            config_json = json.load(f)
+        # Only set values that were NOT explicitly provided on the CLI.
+        # argparse stores defaults for every arg; we detect CLI-provided args by
+        # checking which keys are still at their default value.
+        defaults = {a.dest: a.default for a in argparser._actions}
+        for key, value in config_json.items():
+            dest = key.replace("-", "_")
+            if not hasattr(arguments, dest):
+                logging.warning(f"Config key '{key}' is not a recognised argument — ignoring.")
+                continue
+            # Only apply JSON value if the CLI arg is still at its default
+            if getattr(arguments, dest) == defaults.get(dest):
+                setattr(arguments, dest, value)
+
+    # working_dir is required; check after JSON loading
+    if not arguments.working_dir:
+        argparser.error("--working_dir is required (either on the command line or in --config JSON).")
 
     main(arguments)
