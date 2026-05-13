@@ -1340,7 +1340,7 @@ def replace_covalent_bonds_chain(chain:str, covalent_bonds:str=None) -> ResidueS
         new_cov_bonds.append(":".join([rechained, lig]))
     return ",".join(new_cov_bonds)
 
-def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_path, jobstarter):
+def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_path, jobstarter, rust_top_n=10000):
     '''
     run clash detection between fragments
     '''
@@ -1456,7 +1456,7 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
         log_and_print(f"Found {total_len} valid combinations.")
     
     # Create rotamer csv paths
-    valid_combos = score_files(valid_combo_path, in_files, d["rows"], d["cols"], 1000)
+    valid_combos = score_files(valid_combo_path, in_files, d["rows"], d["cols"], rust_top_n)
 
     log_and_print("Extracting data for each pose...")
     flattened_dfs = []
@@ -2191,7 +2191,7 @@ def main(args):
 
     #combinations = itertools.product(*[[row for _, row in pose_df.iterrows()] for _, pose_df in grouped_df])
     log_and_print('Performing pairwise clash detection...')
-    ensemble_dfs = run_clash_detection(data=combined, directory=clash_dir, bb_multiplier=args.frag_frag_bb_clash_vdw_multiplier, sc_multiplier=args.frag_frag_sc_clash_vdw_multiplier, script_path=os.path.join(utils_dir, "clash_detection.py"), jobstarter=jobstarter)
+    ensemble_dfs = run_clash_detection(data=combined, directory=clash_dir, bb_multiplier=args.frag_frag_bb_clash_vdw_multiplier, sc_multiplier=args.frag_frag_sc_clash_vdw_multiplier, script_path=os.path.join(utils_dir, "clash_detection.py"), jobstarter=jobstarter, rust_top_n=args.rust_top_n)
 
     #calculate scores
     score_df = ensemble_dfs.groupby('ensemble_num', sort=False).mean(numeric_only=True)
@@ -2424,6 +2424,7 @@ if __name__ == "__main__":
     argparser.add_argument("--fragment_score_weight", type=float, default=1, help="Maximum number of cpus to run on")
     argparser.add_argument("--max_top_out", type=int, default=100, help="Maximum number of top-ranked output paths")
     argparser.add_argument("--max_random_out", type=int, default=100, help="Maximum number of random-ranked output paths")
+    argparser.add_argument("--rust_top_n", type=int, default=10000, help="Number of top combinations the Rust scorer keeps before Python selects from them. Must be >= max_top_out + max_random_out. Increase for more diversity when billions of valid combinations exist.")
 
 
     arguments = argparser.parse_args()

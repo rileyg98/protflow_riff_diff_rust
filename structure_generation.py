@@ -1118,7 +1118,7 @@ def main(args):
             )
 
             # filter poses:
-            backbones.filter_poses_by_value(score_col="esm_plddt", value=70, operator=">=", prefix="screen_esm_plddt", plot=True)
+            backbones.filter_poses_by_value(score_col="esm_plddt", value=args.screen_esm_plddt_cutoff, operator=">=", prefix="screen_esm_plddt", plot=True)
             backbones.filter_poses_by_value(score_col="esm_tm_TM_score_ref", value=0.9, operator=">=", prefix="screen_esm_TMscore", plot=True)
             backbones.filter_poses_by_value(score_col="esm_catres_bb_rmsd", value=1.5, operator="<=", prefix="screen_esm_catres_bb_rmsd", plot=True)
             backbones.filter_poses_by_value(score_col="esm_motif_rmsd", value=1.5, operator="<=", prefix="esm_motif_rmsd", plot=True)
@@ -2044,6 +2044,7 @@ if __name__ == "__main__":
     argparser.add_argument("--rfdiffusion_options", type=str, default="", help="Additional options for RFdiffusion runs.")
     argparser.add_argument("--min_contacts", type=int, default=5, help="Mininum number of backbone atoms within 8 A per ligand heavy atom after prediction.")
     argparser.add_argument("--contacts_target_value", type=int, default=9, help="Target number of backbone atoms within 8 A per ligand heavy atom after prediction.")
+    argparser.add_argument("--screen_esm_plddt_cutoff", type=float, default=70, help="ESMFold pLDDT cutoff for screening filter. Lower this (e.g. 50-60) if all poses fail on the first run.")
 
     arguments = argparser.parse_args()
 
